@@ -83,15 +83,14 @@ if uploaded_file:
                     df['Semana'] = df['Dias_Desde_Inicio'].apply(classificar_semana)
                     df[col_qtd] = pd.to_numeric(df[col_qtd], errors='coerce').fillna(0)
                     
-                    # Cria as tabelas base
+                    # Tabelas Base
                     tabela_qtd = pd.pivot_table(df, values=col_qtd, index=col_sku, columns='Semana', aggfunc='sum', fill_value=0).astype(int)
                     tabela_rec = pd.pivot_table(df, values=col_receita, index=col_sku, columns='Semana', aggfunc='sum', fill_value=0)
                     
-                    # 1. Adiciona o Total do Mês (Soma das linhas por SKU)
+                    # Totais Lineares e de Colunas
                     tabela_qtd['Total do Mês'] = tabela_qtd.sum(axis=1)
                     tabela_rec['Total do Mês'] = tabela_rec.sum(axis=1)
 
-                    # 2. Adiciona o TOTAL GERAL (Soma das colunas por Semana)
                     tabela_qtd.loc['TOTAL GERAL'] = tabela_qtd.sum(axis=0)
                     tabela_rec.loc['TOTAL GERAL'] = tabela_rec.sum(axis=0)
                     
@@ -102,7 +101,6 @@ if uploaded_file:
                         df_calc = df_pivot.copy() 
                         df_format = df_pivot.copy() 
                         
-                        # Isola apenas as colunas de semana para o cálculo de Deltas
                         semanas = [c for c in df_pivot.columns if str(c).startswith('Semana')]
                         semanas = sorted(semanas)
                         cols_finais = [semanas[0]]
@@ -129,40 +127,42 @@ if uploaded_file:
                             
                             cols_finais.extend([delta_col, s_atu])
                             
-                        # Anexa a coluna de Total do Mês no final da tabela
                         cols_finais.append('Total do Mês')
                         return df_format[cols_finais]
 
                     tabela_qtd_final = calcular_deltas(tabela_qtd, is_currency=False)
                     tabela_rec_final = calcular_deltas(tabela_rec, is_currency=True)
                     
-                    def colorir_deltas(val):
-                        if isinstance(val, str) and '%' in val:
-                            if val.startswith('+') and val != '+0.0%':
-                                return 'color: #15803d; font-weight: bold;'
-                            elif val.startswith('-'):
-                                return 'color: #b91c1c; font-weight: bold;'
-                        return ''
-                    
-                    # Aplica cor nos Deltas e destaca a linha de TOTAL GERAL
-                    def formatar_tabela(df):
-                        try:
-                            styled = df.style.map(colorir_deltas)
-                        except AttributeError:
-                            styled = df.style.applymap(colorir_deltas)
+                    # Matriz de Estilos
+                    def aplicar_estilos(df_estilo):
+                        estilos = pd.DataFrame('', index=df_estilo.index, columns=df_estilo.columns)
                         
-                        # Destaca a linha de TOTAL GERAL
-                        return styled.apply(lambda x: ['background-color: #f1f5f9; font-weight: bold' if x.name == 'TOTAL GERAL' else '' for i in x], axis=1)
-                    
+                        for col in df_estilo.columns:
+                            if isinstance(col, str) and col.startswith('Δ'):
+                                for idx in df_estilo.index:
+                                    if idx != 'TOTAL GERAL':
+                                        val = df_estilo.at[idx, col]
+                                        if isinstance(val, str):
+                                            if val.startswith('+') and val != '+0.0%':
+                                                estilos.at[idx, col] = 'color: #15803d; font-weight: bold;'
+                                            elif val.startswith('-'):
+                                                estilos.at[idx, col] = 'color: #b91c1c; font-weight: bold;'
+                        
+                        # Fixa o TOTAL GERAL em preto e fundo destacado
+                        if 'TOTAL GERAL' in df_estilo.index:
+                            estilos.loc['TOTAL GERAL', :] = 'background-color: #f1f5f9; color: #000000; font-weight: bold;'
+                            
+                        return estilos
+
                     st.success(f"Análise concluída! Foram processadas {len(df)} vendas no período.")
                     
                     aba1, aba2 = st.tabs(["📦 Volume de Vendas", "💰 Faturamento Bruto"])
                     
                     with aba1:
-                        st.dataframe(formatar_tabela(tabela_qtd_final), use_container_width=True)
+                        st.dataframe(tabela_qtd_final.style.apply(aplicar_estilos, axis=None), use_container_width=True)
                         
                     with aba2:
-                        st.dataframe(formatar_tabela(tabela_rec_final), use_container_width=True)
+                        st.dataframe(tabela_rec_final.style.apply(aplicar_estilos, axis=None), use_container_width=True)
             
     except Exception as e:
         st.error(f"Erro inesperado: {e}")
