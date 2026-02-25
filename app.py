@@ -90,8 +90,8 @@ if uploaded_file:
                         return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
                     def calcular_deltas(df_pivot, is_currency=False):
-                        df_calc = df_pivot.copy() # Usado apenas para os cálculos matemáticos
-                        df_format = df_pivot.copy() # Usado para exibir na tela
+                        df_calc = df_pivot.copy() 
+                        df_format = df_pivot.copy() 
                         semanas = sorted(df_pivot.columns.tolist())
                         cols_finais = [semanas[0]]
                         
@@ -103,7 +103,6 @@ if uploaded_file:
                             s_atu = semanas[i]
                             delta_col = f"Δ {s_atu}"
                             
-                            # Matemática usando a base de cálculo intacta
                             df_format[delta_col] = np.where(
                                 df_calc[s_ant] == 0,
                                 np.where(df_calc[s_atu] > 0, 1.0, 0.0),
@@ -122,15 +121,31 @@ if uploaded_file:
                     tabela_qtd_final = calcular_deltas(tabela_qtd, is_currency=False)
                     tabela_rec_final = calcular_deltas(tabela_rec, is_currency=True)
                     
+                    # Estilização de cores
+                    def colorir_deltas(val):
+                        if isinstance(val, str) and '%' in val:
+                            if val.startswith('+') and val != '+0.0%':
+                                return 'color: #15803d; font-weight: bold;'
+                            elif val.startswith('-'):
+                                return 'color: #b91c1c; font-weight: bold;'
+                        return ''
+                    
+                    try:
+                        styled_qtd = tabela_qtd_final.style.map(colorir_deltas)
+                        styled_rec = tabela_rec_final.style.map(colorir_deltas)
+                    except AttributeError:
+                        styled_qtd = tabela_qtd_final.style.applymap(colorir_deltas)
+                        styled_rec = tabela_rec_final.style.applymap(colorir_deltas)
+                    
                     st.success(f"Análise concluída! Foram processadas {len(df)} vendas no período.")
                     
                     aba1, aba2 = st.tabs(["📦 Volume de Vendas", "💰 Faturamento Bruto"])
                     
                     with aba1:
-                        st.dataframe(tabela_qtd_final, use_container_width=True)
+                        st.dataframe(styled_qtd, use_container_width=True)
                         
                     with aba2:
-                        st.dataframe(tabela_rec_final, use_container_width=True)
+                        st.dataframe(styled_rec, use_container_width=True)
             
     except Exception as e:
         st.error(f"Erro inesperado: {e}")
