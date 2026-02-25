@@ -11,7 +11,6 @@ if uploaded_file:
     try:
         df_raw = pd.read_excel(uploaded_file, header=None)
         
-        # Localiza o cabeçalho
         header_row = None
         for i, row in df_raw.iterrows():
             valores_linha = [str(val).strip() for val in row.values]
@@ -28,7 +27,6 @@ if uploaded_file:
             col_data = 'Data da venda' 
             col_qtd = 'Unidades'
             
-            # Identifica a coluna de faturamento
             possiveis_receitas = ['Receita (BRL)', 'Total (BRL)', 'Total', 'Receita', 'Valor da venda', 'Faturamento']
             col_receita = next((col for col in possiveis_receitas if col in df.columns), None)
 
@@ -39,21 +37,28 @@ if uploaded_file:
             else:
                 df = df.dropna(subset=[col_sku])
                 
-                # Limpeza de moeda (transforma "R$ 1.500,00" em 1500.00 numérico)
-                df[col_receita] = df[col_receita].astype(str).str.replace('R$', '', regex=False).str.replace('.', '', regex=False).str.replace(',', '.', regex=False)
-                df[col_receita] = pd.to_numeric(df[col_receita], errors='coerce').fillna(0)
+                def limpar_moeda(val):
+                    if isinstance(val, (int, float)): return float(val)
+                    val = str(val).replace('R$', '').replace('BRL', '').strip()
+                    if '.' in val and ',' in val:
+                        val = val.replace('.', '').replace(',', '.')
+                    elif ',' in val:
+                        val = val.replace(',', '.')
+                    try:
+                        return float(val)
+                    except:
+                        return 0.0
+
+                df[col_receita] = df[col_receita].apply(limpar_moeda)
                 
-                # Tradutor de datas do ML
                 def limpar_data_ml(data_str):
                     try:
                         partes = str(data_str).lower().split()
                         if len(partes) >= 5:
                             dia, mes_texto, ano = partes[0], partes[2], partes[4]
-                            meses = {
-                                'janeiro': '01', 'fevereiro': '02', 'março': '03', 'marco': '03',
-                                'abril': '04', 'maio': '05', 'junho': '06', 'julho': '07', 
-                                'agosto': '08', 'setembro': '09', 'outubro': '10', 'novembro': '11', 'dezembro': '12'
-                            }
+                            meses = {'janeiro': '01', 'fevereiro': '02', 'março': '03', 'marco': '03',
+                                     'abril': '04', 'maio': '05', 'junho': '06', 'julho': '07', 
+                                     'agosto': '08', 'setembro': '09', 'outubro': '10', 'novembro': '11', 'dezembro': '12'}
                             return pd.to_datetime(f"{ano}-{meses.get(mes_texto, '01')}-{dia}")
                     except:
                         pass
@@ -78,55 +83,53 @@ if uploaded_file:
                     df['Semana'] = df['Dias_Desde_Inicio'].apply(classificar_semana)
                     df[col_qtd] = pd.to_numeric(df[col_qtd], errors='coerce').fillna(0)
                     
-                    # Gera as tabelas base
                     tabela_qtd = pd.pivot_table(df, values=col_qtd, index=col_sku, columns='Semana', aggfunc='sum', fill_value=0).astype(int)
                     tabela_rec = pd.pivot_table(df, values=col_receita, index=col_sku, columns='Semana', aggfunc='sum', fill_value=0)
                     
-                    # Função matemática para adicionar os Deltas
+                    def formatar_brl(valor):
+                        return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
+
                     def calcular_deltas(df_pivot, is_currency=False):
-                        df_res = df_pivot.copy()
+                        df_calc = df_pivot.copy() # Usado apenas para os cálculos matemáticos
+                        df_format = df_pivot.copy() # Usado para exibir na tela
                         semanas = sorted(df_pivot.columns.tolist())
                         cols_finais = [semanas[0]]
+                        
+                        if is_currency:
+                            df_format[semanas[0]] = df_calc[semanas[0]].apply(formatar_brl)
                         
                         for i in range(1, len(semanas)):
                             s_ant = semanas[i-1]
                             s_atu = semanas[i]
                             delta_col = f"Δ {s_atu}"
                             
-                            # Evita divisão por zero. Se o anterior for 0 e o atual > 0, variação é +100%
-                            df_res[delta_col] = np.where(
-                                df_res[s_ant] == 0,
-                                np.where(df_res[s_atu] > 0, 1.0, 0.0),
-                                (df_res[s_atu] - df_res[s_ant]) / df_res[s_ant]
+                            # Matemática usando a base de cálculo intacta
+                            df_format[delta_col] = np.where(
+                                df_calc[s_ant] == 0,
+                                np.where(df_calc[s_atu] > 0, 1.0, 0.0),
+                                (df_calc[s_atu] - df_calc[s_ant]) / df_calc[s_ant]
                             )
                             
-                            # Formata o delta como "+15.5%" ou "-10.0%"
-                            df_res[delta_col] = df_res[delta_col].apply(lambda x: f"{x*100:+.1f}%")
+                            df_format[delta_col] = df_format[delta_col].apply(lambda x: f"{x*100:+.1f}%")
                             
                             if is_currency:
-                                df_res[s_atu] = df_res[s_atu].apply(lambda x: f"R$ {x:,.2f}")
-                                if i == 1: # Formata a primeira coluna também
-                                    df_res[s_ant] = df_res[s_ant].apply(lambda x: f"R$ {x:,.2f}")
+                                df_format[s_atu] = df_calc[s_atu].apply(formatar_brl)
                             
                             cols_finais.extend([delta_col, s_atu])
                             
-                        return df_res[cols_finais]
+                        return df_format[cols_finais]
 
-                    # Aplica a matemática
                     tabela_qtd_final = calcular_deltas(tabela_qtd, is_currency=False)
                     tabela_rec_final = calcular_deltas(tabela_rec, is_currency=True)
                     
-                    # Renderiza a interface com Abas
                     st.success(f"Análise concluída! Foram processadas {len(df)} vendas no período.")
                     
                     aba1, aba2 = st.tabs(["📦 Volume de Vendas", "💰 Faturamento Bruto"])
                     
                     with aba1:
-                        st.subheader("Unidades Vendidas e Variação %")
                         st.dataframe(tabela_qtd_final, use_container_width=True)
                         
                     with aba2:
-                        st.subheader("Receita (R$) e Variação %")
                         st.dataframe(tabela_rec_final, use_container_width=True)
             
     except Exception as e:
