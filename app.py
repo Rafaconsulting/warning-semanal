@@ -83,8 +83,17 @@ if uploaded_file:
                     df['Semana'] = df['Dias_Desde_Inicio'].apply(classificar_semana)
                     df[col_qtd] = pd.to_numeric(df[col_qtd], errors='coerce').fillna(0)
                     
+                    # Cria as tabelas base
                     tabela_qtd = pd.pivot_table(df, values=col_qtd, index=col_sku, columns='Semana', aggfunc='sum', fill_value=0).astype(int)
                     tabela_rec = pd.pivot_table(df, values=col_receita, index=col_sku, columns='Semana', aggfunc='sum', fill_value=0)
+                    
+                    # 1. Adiciona o Total do Mês (Soma das linhas por SKU)
+                    tabela_qtd['Total do Mês'] = tabela_qtd.sum(axis=1)
+                    tabela_rec['Total do Mês'] = tabela_rec.sum(axis=1)
+
+                    # 2. Adiciona o TOTAL GERAL (Soma das colunas por Semana)
+                    tabela_qtd.loc['TOTAL GERAL'] = tabela_qtd.sum(axis=0)
+                    tabela_rec.loc['TOTAL GERAL'] = tabela_rec.sum(axis=0)
                     
                     def formatar_brl(valor):
                         return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
@@ -92,11 +101,15 @@ if uploaded_file:
                     def calcular_deltas(df_pivot, is_currency=False):
                         df_calc = df_pivot.copy() 
                         df_format = df_pivot.copy() 
-                        semanas = sorted(df_pivot.columns.tolist())
+                        
+                        # Isola apenas as colunas de semana para o cálculo de Deltas
+                        semanas = [c for c in df_pivot.columns if str(c).startswith('Semana')]
+                        semanas = sorted(semanas)
                         cols_finais = [semanas[0]]
                         
                         if is_currency:
                             df_format[semanas[0]] = df_calc[semanas[0]].apply(formatar_brl)
+                            df_format['Total do Mês'] = df_calc['Total do Mês'].apply(formatar_brl)
                         
                         for i in range(1, len(semanas)):
                             s_ant = semanas[i-1]
@@ -116,12 +129,13 @@ if uploaded_file:
                             
                             cols_finais.extend([delta_col, s_atu])
                             
+                        # Anexa a coluna de Total do Mês no final da tabela
+                        cols_finais.append('Total do Mês')
                         return df_format[cols_finais]
 
                     tabela_qtd_final = calcular_deltas(tabela_qtd, is_currency=False)
                     tabela_rec_final = calcular_deltas(tabela_rec, is_currency=True)
                     
-                    # Estilização de cores
                     def colorir_deltas(val):
                         if isinstance(val, str) and '%' in val:
                             if val.startswith('+') and val != '+0.0%':
@@ -130,22 +144,25 @@ if uploaded_file:
                                 return 'color: #b91c1c; font-weight: bold;'
                         return ''
                     
-                    try:
-                        styled_qtd = tabela_qtd_final.style.map(colorir_deltas)
-                        styled_rec = tabela_rec_final.style.map(colorir_deltas)
-                    except AttributeError:
-                        styled_qtd = tabela_qtd_final.style.applymap(colorir_deltas)
-                        styled_rec = tabela_rec_final.style.applymap(colorir_deltas)
+                    # Aplica cor nos Deltas e destaca a linha de TOTAL GERAL
+                    def formatar_tabela(df):
+                        try:
+                            styled = df.style.map(colorir_deltas)
+                        except AttributeError:
+                            styled = df.style.applymap(colorir_deltas)
+                        
+                        # Destaca a linha de TOTAL GERAL
+                        return styled.apply(lambda x: ['background-color: #f1f5f9; font-weight: bold' if x.name == 'TOTAL GERAL' else '' for i in x], axis=1)
                     
                     st.success(f"Análise concluída! Foram processadas {len(df)} vendas no período.")
                     
                     aba1, aba2 = st.tabs(["📦 Volume de Vendas", "💰 Faturamento Bruto"])
                     
                     with aba1:
-                        st.dataframe(styled_qtd, use_container_width=True)
+                        st.dataframe(formatar_tabela(tabela_qtd_final), use_container_width=True)
                         
                     with aba2:
-                        st.dataframe(styled_rec, use_container_width=True)
+                        st.dataframe(formatar_tabela(tabela_rec_final), use_container_width=True)
             
     except Exception as e:
         st.error(f"Erro inesperado: {e}")
