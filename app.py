@@ -83,17 +83,37 @@ if uploaded_file:
                     df['Semana'] = df['Dias_Desde_Inicio'].apply(classificar_semana)
                     df[col_qtd] = pd.to_numeric(df[col_qtd], errors='coerce').fillna(0)
                     
-                    # Tabelas Base
+                    # 1. Tabelas Base
                     tabela_qtd = pd.pivot_table(df, values=col_qtd, index=col_sku, columns='Semana', aggfunc='sum', fill_value=0).astype(int)
                     tabela_rec = pd.pivot_table(df, values=col_receita, index=col_sku, columns='Semana', aggfunc='sum', fill_value=0)
                     
-                    # Totais Lineares e de Colunas
                     tabela_qtd['Total do Mês'] = tabela_qtd.sum(axis=1)
                     tabela_rec['Total do Mês'] = tabela_rec.sum(axis=1)
 
+                    # 2. Cálculo da Curva ABC
+                    tabela_abc = pd.DataFrame(index=tabela_rec.index)
+                    colunas_analise = [c for c in tabela_rec.columns if str(c).startswith('Semana')] + ['Total do Mês']
+                    
+                    for col in colunas_analise:
+                        serie_ord = tabela_rec[col].sort_values(ascending=False)
+                        soma_total = serie_ord.sum()
+                        
+                        if soma_total > 0:
+                            cum_pct = serie_ord.cumsum() / soma_total
+                            def get_curva(p):
+                                if p <= 0.80: return 'A'
+                                elif p <= 0.95: return 'B'
+                                else: return 'C'
+                            mapa_curva = cum_pct.apply(get_curva)
+                            tabela_abc[f"Curva {col}" if 'Semana' in col else "Curva do Mês"] = tabela_abc.index.map(mapa_curva)
+                        else:
+                            tabela_abc[f"Curva {col}" if 'Semana' in col else "Curva do Mês"] = '-'
+                            
+                    # 3. Adiciona TOTAL GERAL
                     tabela_qtd.loc['TOTAL GERAL'] = tabela_qtd.sum(axis=0)
                     tabela_rec.loc['TOTAL GERAL'] = tabela_rec.sum(axis=0)
                     
+                    # 4. Cálculo de Deltas e Formatação
                     def formatar_brl(valor):
                         return f"R$ {valor:,.2f}".replace(',', 'X').replace('.', ',').replace('X', '.')
 
@@ -119,7 +139,6 @@ if uploaded_file:
                                 np.where(df_calc[s_atu] > 0, 1.0, 0.0),
                                 (df_calc[s_atu] - df_calc[s_ant]) / df_calc[s_ant]
                             )
-                            
                             df_format[delta_col] = df_format[delta_col].apply(lambda x: f"{x*100:+.1f}%")
                             
                             if is_currency:
@@ -133,10 +152,9 @@ if uploaded_file:
                     tabela_qtd_final = calcular_deltas(tabela_qtd, is_currency=False)
                     tabela_rec_final = calcular_deltas(tabela_rec, is_currency=True)
                     
-                    # Matriz de Estilos
-                    def aplicar_estilos(df_estilo):
+                    # 5. Estilização Visual
+                    def aplicar_estilos_deltas(df_estilo):
                         estilos = pd.DataFrame('', index=df_estilo.index, columns=df_estilo.columns)
-                        
                         for col in df_estilo.columns:
                             if isinstance(col, str) and col.startswith('Δ'):
                                 for idx in df_estilo.index:
@@ -148,21 +166,37 @@ if uploaded_file:
                                             elif val.startswith('-'):
                                                 estilos.at[idx, col] = 'color: #b91c1c; font-weight: bold;'
                         
-                        # Fixa o TOTAL GERAL em preto e fundo destacado
                         if 'TOTAL GERAL' in df_estilo.index:
                             estilos.loc['TOTAL GERAL', :] = 'background-color: #f1f5f9; color: #000000; font-weight: bold;'
-                            
+                        return estilos
+                        
+                    def aplicar_estilos_abc(df_estilo):
+                        estilos = pd.DataFrame('', index=df_estilo.index, columns=df_estilo.columns)
+                        for col in df_estilo.columns:
+                            for idx in df_estilo.index:
+                                val = df_estilo.at[idx, col]
+                                if val == 'A': estilos.at[idx, col] = 'color: #15803d; font-weight: bold;' # Verde
+                                elif val == 'B': estilos.at[idx, col] = 'color: #a16207; font-weight: bold;' # Amarelo escuro
+                                elif val == 'C': estilos.at[idx, col] = 'color: #b91c1c; font-weight: bold;' # Vermelho
                         return estilos
 
+                    # 6. Renderização das Abas
                     st.success(f"Análise concluída! Foram processadas {len(df)} vendas no período.")
-                    
-                    aba1, aba2 = st.tabs(["📦 Volume de Vendas", "💰 Faturamento Bruto"])
+                    aba1, aba2, aba3 = st.tabs(["📦 Volume de Vendas", "💰 Faturamento", "📈 Evolução Curva ABC"])
                     
                     with aba1:
-                        st.dataframe(tabela_qtd_final.style.apply(aplicar_estilos, axis=None), use_container_width=True)
+                        st.dataframe(tabela_qtd_final.style.apply(aplicar_estilos_deltas, axis=None), use_container_width=True)
                         
                     with aba2:
-                        st.dataframe(tabela_rec_final.style.apply(aplicar_estilos, axis=None), use_container_width=True)
+                        st.dataframe(tabela_rec_final.style.apply(aplicar_estilos_deltas, axis=None), use_container_width=True)
+                        
+                    with aba3:
+                        # Filtro interativo de Curva ABC
+                        curvas_disponiveis = sorted([c for c in tabela_abc['Curva do Mês'].unique() if c != '-'])
+                        curvas_selecionadas = st.multiselect("Filtrar por Curva Final do Mês:", options=curvas_disponiveis, default=curvas_disponiveis)
+                        
+                        tabela_abc_filtrada = tabela_abc[tabela_abc['Curva do Mês'].isin(curvas_selecionadas)]
+                        st.dataframe(tabela_abc_filtrada.style.apply(aplicar_estilos_abc, axis=None), use_container_width=True)
             
     except Exception as e:
         st.error(f"Erro inesperado: {e}")
